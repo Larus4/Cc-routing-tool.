@@ -77,13 +77,13 @@ st.session_state.blocked_panels = {
 
 # ------------------- BENUTZEROBERFLÄCHE -------------------
 st.title("🔌 Cross-Connect Routing Tool")
-st.caption("Inter-IBX Trunk Finder | Range-Ausgabe & Port-Berechnung")
+st.caption("Inter-IBX Trunk Finder | Raumbestimmung & Port-Berechnung")
 
 st.subheader("📍 Startpunkt (A-Side)")
 pp_a = st.text_input(
     "PP-Nummer A (Pflichtfeld)*",
     value="",
-    placeholder="z.B. PP:0303:1408622",
+    placeholder="z.B. PP:0401:1328125",
 )
 port_a_input = st.number_input(
     "Port / Faser A (z. B. 3 für Port 3/4)*",
@@ -199,9 +199,10 @@ if st.button("🚀 Pfad ermitteln", use_container_width=True):
             f" {', '.join(active_blocked)}"
         )
 
-      st.markdown("### 🗺️ Routing-Pfad, System-Range & Port-Details:")
+      st.markdown("### 🗺️ Routing-Pfad, Rauminformationen & System-Details:")
 
       for idx, current_pp in enumerate(route_pps):
+        # Link-Informationen aus der Datenbank ziehen
         link_details = next(
             (
                 item
@@ -212,21 +213,19 @@ if st.button("🚀 Pfad ermitteln", use_container_width=True):
             None,
         )
 
+        q_raum = (
+            link_details.get("quelle_raum", "N/A") if link_details else "N/A"
+        )
+        z_raum = link_details.get("ziel_raum", "N/A") if link_details else "N/A"
+        rack = (
+            link_details.get("quelle_rack", "N/A") if link_details else "N/A"
+        )
+        he = link_details.get("quelle_he", "N/A") if link_details else "N/A"
+
         if idx == 0:
-          raum = (
-              link_details.get("quelle_raum", "N/A")
-              if link_details
-              else "Aus PP ableitbar"
-          )
-          rack = (
-              link_details.get("quelle_rack", "N/A")
-              if link_details
-              else "Aus PP ableitbar"
-          )
-          he = link_details.get("quelle_he", "N/A") if link_details else "N/A"
           port_details = (
-              f"🔒 **Start-Doppelport:** `Port {p1}/{p2}`\n  * 🖥️ **System-Auswahl:**"
-              " `Startpanel A`"
+              f"🏢 **System-Raum A:** `{q_raum}` | **Ziel-Raum dieses Trunks:**"
+              f" `{z_raum}`\n  * 🔒 **Start-Doppelport:** `Port {p1}/{p2}`"
           )
         else:
           prev_pp = route_pps[idx - 1]
@@ -239,33 +238,42 @@ if st.button("🚀 Pfad ermitteln", use_container_width=True):
               ),
               None,
           )
-          raum = hop_link.get("ziel_raum", "N/A") if hop_link else "N/A"
-          rack = hop_link.get("ziel_rack", "N/A") if hop_link else "N/A"
-          he = hop_link.get("ziel_he", "N/A") if hop_link else "N/A"
+
+          hop_q_raum = (
+              hop_link.get("quelle_raum", "N/A") if hop_link else q_raum
+          )
+          hop_z_raum = (
+              hop_link.get("ziel_raum", "N/A") if hop_link else z_raum
+          )
+          rack = hop_link.get("ziel_rack", "N/A") if hop_link else rack
+          he = hop_link.get("ziel_he", "N/A") if hop_link else he
 
           z_port = hop_link.get("ziel_port", "") if hop_link else ""
           p_range = hop_link.get("port_range", "") if hop_link else ""
 
           if z_port:
             port_details = (
-                f"🖥️ **Im System auszuwählen (Range/Port):** `{z_port}`\n  *"
-                f" 🔌 **Ziel-Steckplatz für Techniker:** `{z_port}`"
+                f"🏢 **Verbindung:** Von `{hop_q_raum}` ➔ `{hop_z_raum}`\n  *"
+                f" 🖥️ **System-Range:** `{z_port}`\n  * 🔌 **Steckplatz:**"
+                f" `{z_port}`"
             )
           elif p_range:
             calc_port = calculate_mapped_port(port_a_input, p_range)
             port_details = (
-                f"🖥️ **Im System auszuwählen (Range):** `{p_range}`\n  * 🔌"
-                f" **Berechneter Steckplatz für Techniker:** `{calc_port}`"
+                f"🏢 **Verbindung:** Von `{hop_q_raum}` ➔ `{hop_z_raum}`\n  *"
+                f" 🖥️ **System-Range:** `{p_range}`\n  * 🔌 **Steckplatz:**"
+                f" `{calc_port}`"
             )
           else:
             port_details = (
-                f"🖥️ **Im System auszuwählen:** `1:1 Durchschaltung`\n  * 🔌"
-                f" **Ziel-Steckplatz für Techniker:** `Port {p1}/{p2}`"
+                f"🏢 **Verbindung:** Von `{hop_q_raum}` ➔ `{hop_z_raum}`\n  *"
+                " 🖥️ **System-Range:** `1:1 Durchschaltung`\n  * 🔌"
+                f" **Steckplatz:** `Port {p1}/{p2}`"
             )
 
         st.info(f"""
-                **Step {idx + 1}: {current_pp}**  
-                * 📍 **Raum:** `{raum}` | **Rack:** `{rack}` | **HE:** `{he}`  
+                **Step {idx + 1}: Panel {current_pp}**  
+                * 📍 **Rack:** `{rack}` | **HE:** `{he}`  
                 * {port_details}
                 """)
 
