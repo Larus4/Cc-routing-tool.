@@ -7,26 +7,24 @@ st.set_page_config(
 )
 
 # ------------------- GOOGLE SHEETS ANBINDUNG -------------------
-# FÜGE HIER DEINEN KOPIERTEN GOOGLE SHEETS LINK EIN:
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1pK3J9V0CSQ7EmTZ90effqRmUV7GhjCwpDhKQrtvTL1k/edit?usp=drivesdk"
 
 
-@st.cache_data(ttl=30)  # Aktualisiert alle 30 Sekunden live aus Google Sheets
+@st.cache_data(ttl=30)  # Live-Update alle 30 Sekunden
 def load_trunk_data(sheet_url):
   if "DEIN_GOOGLE_SHEETS_LINK_HIER" in sheet_url or not sheet_url:
-    st.warning("⚠️ Bitte trage deinen Google Sheets Link in die main.py ein!")
+    st.warning("⚠️ Bitte trage deinen Google Sheets Link ein!")
     return []
   try:
-    # Wandelt den Teilen-Link automatisch in einen CSV-Export-Link um
     csv_url = sheet_url.replace("/edit?usp=sharing", "/gviz/tq?tqx=out:csv")
-    csv_url = csv_url.replace("/edit#gid=", "/gviz/tq?tqx=out:csv&gid=")
+    csv_url = csv_url.replace(
+        "/edit?usp=drivesdk", "/gviz/tq?tqx=out:csv"
+    ).replace("/edit#gid=", "/gviz/tq?tqx=out:csv&gid=")
     if "/gviz/tq" not in csv_url:
       csv_url = csv_url.split("/edit")[0] + "/gviz/tq?tqx=out:csv"
 
     df = pd.read_csv(csv_url)
     df.fillna("", inplace=True)
-
-    # Spaltennamen zur Sicherheit bereinigen
     df.columns = [c.strip().lower() for c in df.columns]
 
     for col in ["quelle_pp", "ziel_pp"]:
@@ -52,18 +50,18 @@ st.session_state.blocked_panels = {
     if exp > now
 }
 
-# ------------------- INPUT-FORMULAR -------------------
+# ------------------- BENUTZEROBERFLÄCHE -------------------
 st.title("🔌 Cross-Connect Routing Tool")
-st.caption("Live-Anbindung an Google Sheets | Dynamic Routing")
+st.caption("Dynamic Shortest-Path & IBX Auto-Routing")
 
-st.subheader("📍 Startpunkt")
+st.subheader("📍 Startpunkt (A-Side)")
 pp_a = st.text_input(
     "PP-Nummer A (Pflichtfeld)*",
     value="",
     placeholder="z.B. PP:0303:1408622",
 )
 port_a_input = st.number_input(
-    "Port / Faser A (Optional - 0 für komplette Range)",
+    "Port / Faser A (Optional - 0 für alle Ports)",
     min_value=0,
     max_value=864,
     value=0,
@@ -71,31 +69,79 @@ port_a_input = st.number_input(
 
 st.markdown("---")
 
+st.subheader("🎯 Zielpunkt (Z-Side)")
+target_mode = st.radio(
+    "Ziel-Spezifikation wählen:",
+    ["Ziel-IBX suchen (schnellster Pfad)", "Konkretes Z-Panel angeben"],
+)
 
-# ------------------- ROUTING-LOGIK -------------------
-def find_route_bfs(start_pp, blocked_set):
+pp_z = ""
+target_ibx = ""
+
+if target_mode == "Konkretes Z-Panel angeben":
+  pp_z = st.text_input(
+      "PP-Nummer Z*", value="", placeholder="z.B. PP:0201:999999"
+  )
+else:
+  target_ibx = st.text_input(
+      "Ziel-IBX eingeben (z.B. FR2, FR5, FR7)*",
+      value="",
+      placeholder="z.B. FR2",
+  ).strip()
+
+st.markdown("---")
+
+
+# ------------------- ROUTING ALGORITHMUS (BFS) -------------------
+def find_route(start_pp, blocked_set, target_z="", target_ibx_str=""):
   queue = [[start_pp]]
   visited = set(blocked_set)
+  visited.add(start_pp)
+
+  target_ibx_clean = target_ibx_str.upper() if target_ibx_str else ""
 
   while queue:
     path = queue.pop(0)
     node = path[-1]
 
+    # Prüfen, ob das Ziel erreicht ist
+    if target_z and node == target_z:
+      return path
+
+    # Wenn nach IBX gesucht wird, Standort-Match prüfen
+    if target_ibx_clean:
+      last_link = next(
+          (
+              item
+              for item in TRUNK_DATABASE
+              if item.get("ziel_pp") == node or item.get("quelle_pp") == node
+          ),
+          None,
+      )
+      if last_link:
+        node_raum = (
+            last_link.get("ziel_raum", "")
+            if last_link.get("ziel_pp") == node
+            else last_link.get("quelle_raum", "")
+        )
+        if target_ibx_clean in node_raum.upper():
+          return path
+
+    # Nächste Hops ermitteln
     next_hops = [
         link
         for link in TRUNK_DATABASE
         if link.get("quelle_pp") == node and link.get("ziel_pp") not in visited
     ]
 
-    if not next_hops:
-      return path
-
     for link in next_hops:
-      visited.add(link["ziel_pp"])
+      next_node = link["ziel_pp"]
+      visited.add(next_node)
       new_path = list(path)
-      new_path.append(link["ziel_pp"])
+      new_path.append(next_node)
       queue.append(new_path)
 
+  # Fallback: Liefert den weitesten Weg, falls Ziel nicht erreicht wurde
   return [start_pp]
 
 
@@ -103,79 +149,94 @@ def find_route_bfs(start_pp, blocked_set):
 if st.button("🚀 Pfad ermitteln", use_container_width=True):
   if not pp_a:
     st.error("⚠️ Bitte gib mindestens die PP-Nummer A ein!")
+  elif target_mode == "Konkretes Z-Panel angeben" and not pp_z:
+    st.error("⚠️ Bitte gib die PP-Nummer Z ein!")
+  elif target_mode == "Ziel-IBX suchen (schnellster Pfad)" and not target_ibx:
+    st.error("⚠️ Bitte gib das Ziel-IBX ein!")
   else:
     active_blocked = set(st.session_state.blocked_panels.keys())
-    route_pps = find_route_bfs(pp_a.strip(), active_blocked)
+    route_pps = find_route(
+        pp_a.strip(),
+        active_blocked,
+        target_z=pp_z.strip(),
+        target_ibx_str=target_ibx,
+    )
 
-    st.success("✅ Pfad erfolgreich berechnet!")
-
-    if active_blocked:
-      st.warning(
-          f"⛔ **Aktive Umleitungen wegen voll/gesperrt:**"
-          f" {', '.join(active_blocked)}"
+    if len(route_pps) == 1 and (pp_z or target_ibx):
+      st.error(
+          "❌ Kein passender Pfad in der Datenbank gefunden! Bitte vergewissere"
+          " dich, dass Verbindungen in Google Sheets eingetragen sind."
       )
+    else:
+      st.success("✅ Schnellster Pfad erfolgreich berechnet!")
 
-    st.markdown("### 🗺️ Routing-Pfad & Standort-Details:")
-
-    for idx, current_pp in enumerate(route_pps):
-      link_details = next(
-          (
-              item
-              for item in TRUNK_DATABASE
-              if item.get("quelle_pp") == current_pp
-              or item.get("ziel_pp") == current_pp
-          ),
-          None,
-      )
-
-      if idx == 0:
-        raum = (
-            link_details.get("quelle_raum", "N/A")
-            if link_details
-            else "Aus PP ableitbar"
+      if active_blocked:
+        st.warning(
+            f"⛔ **Aktive Umleitungen wegen VOLL:**"
+            f" {', '.join(active_blocked)}"
         )
-        rack = (
-            link_details.get("quelle_rack", "N/A")
-            if link_details
-            else "Aus PP ableitbar"
-        )
-        he = link_details.get("quelle_he", "N/A") if link_details else "N/A"
-      else:
-        prev_pp = route_pps[idx - 1]
-        hop_link = next(
+
+      st.markdown("### 🗺️ Routing-Pfad & Standort-Details:")
+
+      for idx, current_pp in enumerate(route_pps):
+        link_details = next(
             (
                 item
                 for item in TRUNK_DATABASE
-                if item.get("quelle_pp") == prev_pp
-                and item.get("ziel_pp") == current_pp
+                if item.get("quelle_pp") == current_pp
+                or item.get("ziel_pp") == current_pp
             ),
             None,
         )
-        raum = hop_link.get("ziel_raum", "N/A") if hop_link else "N/A"
-        rack = hop_link.get("ziel_rack", "N/A") if hop_link else "N/A"
-        he = hop_link.get("ziel_he", "N/A") if hop_link else "N/A"
 
-      port_display = (
-          f"Port `{port_a_input}`"
-          if port_a_input > 0
-          else f"Faserbereich `{link_details.get('port_range', 'Alle Ports') if link_details else 'Alle Ports'}`"
-      )
-
-      st.info(f"""
-            **Step {idx + 1}: {current_pp}**  
-            * 📍 **Raum:** `{raum}` | **Rack:** `{rack}` | **HE:** `{he}`  
-            * 🔌 **Port / Bereich:** {port_display}
-            """)
-
-      if idx > 0:
-        if st.button(
-            f"❌ Panel {current_pp} als VOLL markieren (1 Woche umleiten)",
-            key=f"block_{current_pp}",
-        ):
-          st.session_state.blocked_panels[current_pp] = datetime.now() + timedelta(
-              days=7
+        if idx == 0:
+          raum = (
+              link_details.get("quelle_raum", "N/A")
+              if link_details
+              else "Aus PP ableitbar"
           )
-          st.rerun()
+          rack = (
+              link_details.get("quelle_rack", "N/A")
+              if link_details
+              else "Aus PP ableitbar"
+          )
+          he = link_details.get("quelle_he", "N/A") if link_details else "N/A"
+        else:
+          prev_pp = route_pps[idx - 1]
+          hop_link = next(
+              (
+                  item
+                  for item in TRUNK_DATABASE
+                  if item.get("quelle_pp") == prev_pp
+                  and item.get("ziel_pp") == current_pp
+              ),
+              None,
+          )
+          raum = hop_link.get("ziel_raum", "N/A") if hop_link else "N/A"
+          rack = hop_link.get("ziel_rack", "N/A") if hop_link else "N/A"
+          he = hop_link.get("ziel_he", "N/A") if hop_link else "N/A"
+
+        port_display = (
+            f"Port `{port_a_input}`"
+            if port_a_input > 0
+            else f"Faserbereich `{link_details.get('port_range', 'Alle Ports') if link_details else 'Alle Ports'}`"
+        )
+
+        st.info(f"""
+                **Step {idx + 1}: {current_pp}**  
+                * 📍 **Raum:** `{raum}` | **Rack:** `{rack}` | **HE:** `{he}`  
+                * 🔌 **Port / Bereich:** {port_display}
+                """)
+
+        if idx > 0:
+          if st.button(
+              f"❌ Panel {current_pp} als VOLL markieren (1 Woche umleiten)",
+              key=f"block_{current_pp}",
+          ):
+            st.session_state.blocked_panels[current_pp] = (
+                datetime.now() + timedelta(days=7)
+            )
+            st.rerun()
 
 # ------------------- GESPERRTE PANELS VERWALTEN -------------------
 if st.session_state.blocked_panels:
@@ -188,4 +249,3 @@ if st.session_state.blocked_panels:
         if st.button("Freigeben", key=f"unblock_{pp}"):
           del st.session_state.blocked_panels[pp]
           st.rerun()
-
