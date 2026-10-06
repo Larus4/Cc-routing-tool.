@@ -8,7 +8,7 @@ st.set_page_config(
 
 # ------------------- GOOGLE SHEETS ANBINDUNG -------------------
 # FÜGE HIER DEINEN KOPIERTEN GOOGLE SHEETS LINK EIN:
-GOOGLE_SHEET_URL = https://docs.google.com/spreadsheets/d/1pK3J9V0CSQ7EmTZ90effqRmUV7GhjCwpDhKQrtvTL1k/edit?usp=drivesdk
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1pK3J9V0CSQ7EmTZ90effqRmUV7GhjCwpDhKQrtvTL1k/edit?usp=drivesdk"
 
 
 @st.cache_data(ttl=30)  # Aktualisiert alle 30 Sekunden live aus Google Sheets
