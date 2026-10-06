@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import re
 import pandas as pd
 import streamlit as st
 
@@ -10,7 +11,7 @@ st.set_page_config(
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1pK3J9V0CSQ7EmTZ90effqRmUV7GhjCwpDhKQrtvTL1k/edit?usp=drivesdk"
 
 
-@st.cache_data(ttl=30)  # Live-Update alle 30 Sekunden
+@st.cache_data(ttl=30)
 def load_trunk_data(sheet_url):
   if "DEIN_GOOGLE_SHEETS_LINK_HIER" in sheet_url or not sheet_url:
     st.warning("⚠️ Bitte trage deinen Google Sheets Link ein!")
@@ -40,15 +41,26 @@ def load_trunk_data(sheet_url):
 TRUNK_DATABASE = load_trunk_data(GOOGLE_SHEET_URL)
 
 
-# ------------------- DOPPELPORT-FORMATIERUNG -------------------
-def get_dual_port_str(port_num):
-  if port_num <= 0:
-    return "Frei wählbar / Range"
+# ------------------- PORT- BERECHNUNGS-FUNKTIONEN -------------------
+def get_dual_port_pair(port_num):
   p = int(port_num)
+  if p <= 0:
+    return 1, 2
   if p % 2 != 0:
-    p1, p2 = p, p + 1
-  else:
-    p1, p2 = p - 1, p
+    return p, p + 1
+  return p - 1, p
+
+
+def calculate_mapped_port(start_port, range_str):
+  p1, p2 = get_dual_port_pair(start_port)
+
+  nums = re.findall(r"\d+", str(range_str))
+  if len(nums) >= 2:
+    start_r = int(nums[0])
+    offset = p1 - 1
+    calc_p1 = start_r + offset
+    calc_p2 = calc_p1 + 1
+    return f"Port {calc_p1}/{calc_p2}"
   return f"Port {p1}/{p2}"
 
 
@@ -65,7 +77,7 @@ st.session_state.blocked_panels = {
 
 # ------------------- BENUTZEROBERFLÄCHE -------------------
 st.title("🔌 Cross-Connect Routing Tool")
-st.caption("Dynamic Shortest-Path | Flexible Port-Mapping & IBX Auto-Routing")
+st.caption("Inter-IBX Trunk Finder | Range-Ausgabe & Port-Berechnung")
 
 st.subheader("📍 Startpunkt (A-Side)")
 pp_a = st.text_input(
@@ -74,10 +86,10 @@ pp_a = st.text_input(
     placeholder="z.B. PP:0303:1408622",
 )
 port_a_input = st.number_input(
-    "Port / Faser A (z. B. 1 für Port 1/2)*",
-    min_value=0,
+    "Port / Faser A (z. B. 3 für Port 3/4)*",
+    min_value=1,
     max_value=864,
-    value=1,
+    value=3,
 )
 
 st.markdown("---")
@@ -85,7 +97,10 @@ st.markdown("---")
 st.subheader("🎯 Zielpunkt (Z-Side)")
 target_mode = st.radio(
     "Ziel-Spezifikation wählen:",
-    ["Ziel-IBX suchen (schnellster Pfad)", "Konkretes Z-Panel angeben"],
+    [
+        "Trunk-Panel zum Ziel-IBX suchen (Licht ins Ziel-IBX)",
+        "Konkretes Z-Panel angeben",
+    ],
 )
 
 pp_z = ""
@@ -121,22 +136,17 @@ def find_route(start_pp, blocked_set, target_z="", target_ibx_str=""):
       return path
 
     if target_ibx_clean:
-      last_link = next(
+      link_to_target = next(
           (
               item
               for item in TRUNK_DATABASE
-              if item.get("ziel_pp") == node or item.get("quelle_pp") == node
+              if item.get("quelle_pp") == node
+              and target_ibx_clean in str(item.get("ziel_raum", "")).upper()
           ),
           None,
       )
-      if last_link:
-        node_raum = (
-            last_link.get("ziel_raum", "")
-            if last_link.get("ziel_pp") == node
-            else last_link.get("quelle_raum", "")
-        )
-        if target_ibx_clean in node_raum.upper():
-          return path
+      if link_to_target:
+        return path
 
     next_hops = [
         link
@@ -157,10 +167,14 @@ def find_route(start_pp, blocked_set, target_z="", target_ibx_str=""):
 # ------------------- ROUTING BERECHNEN -------------------
 if st.button("🚀 Pfad ermitteln", use_container_width=True):
   if not pp_a:
-    st.error("⚠️️ Bitte gib mindestens die PP-Nummer A ein!")
+    st.error("⚠️ Bitte gib mindestens die PP-Nummer A ein!")
   elif target_mode == "Konkretes Z-Panel angeben" and not pp_z:
     st.error("⚠️ Bitte gib die PP-Nummer Z ein!")
-  elif target_mode == "Ziel-IBX suchen (schnellster Pfad)" and not target_ibx:
+  elif (
+      target_mode
+      == "Trunk-Panel zum Ziel-IBX suchen (Licht ins Ziel-IBX)"
+      and not target_ibx
+  ):
     st.error("⚠️ Bitte gib das Ziel-IBX ein!")
   else:
     active_blocked = set(st.session_state.blocked_panels.keys())
@@ -173,11 +187,11 @@ if st.button("🚀 Pfad ermitteln", use_container_width=True):
 
     if len(route_pps) == 1 and (pp_z or target_ibx):
       st.error(
-          "❌ Kein passender Pfad in der Datenbank gefunden! Bitte überprüfe die"
-          " Einträge in Google Sheets."
+          "❌ Kein passender Inter-IBX-Trunk / Pfad in der Datenbank gefunden!"
       )
     else:
-      st.success("✅ Path erfolgreich ermittelt!")
+      p1, p2 = get_dual_port_pair(port_a_input)
+      st.success(f"✅ Route ermittelt für Start-Doppelport Port {p1}/{p2}")
 
       if active_blocked:
         st.warning(
@@ -185,9 +199,7 @@ if st.button("🚀 Pfad ermitteln", use_container_width=True):
             f" {', '.join(active_blocked)}"
         )
 
-      st.markdown("### 🗺️ Routing-Pfad & Port-Zuordnung:")
-
-      total_steps = len(route_pps)
+      st.markdown("### 🗺️ Routing-Pfad, System-Range & Port-Details:")
 
       for idx, current_pp in enumerate(route_pps):
         link_details = next(
@@ -212,8 +224,9 @@ if st.button("🚀 Pfad ermitteln", use_container_width=True):
               else "Aus PP ableitbar"
           )
           he = link_details.get("quelle_he", "N/A") if link_details else "N/A"
-          port_info = (
-              f"🔒 **Eingangs-Port:** `{get_dual_port_str(port_a_input)}`"
+          port_details = (
+              f"🔒 **Start-Doppelport:** `Port {p1}/{p2}`\n  * 🖥️ **System-Auswahl:**"
+              " `Startpanel A`"
           )
         else:
           prev_pp = route_pps[idx - 1]
@@ -230,28 +243,30 @@ if st.button("🚀 Pfad ermitteln", use_container_width=True):
           rack = hop_link.get("ziel_rack", "N/A") if hop_link else "N/A"
           he = hop_link.get("ziel_he", "N/A") if hop_link else "N/A"
 
-          # Port-Zuordnung aus Sheet auslesen falls vorhanden
-          q_port = hop_link.get("quelle_port", "") if hop_link else ""
           z_port = hop_link.get("ziel_port", "") if hop_link else ""
           p_range = hop_link.get("port_range", "") if hop_link else ""
 
           if z_port:
-            port_info = f"📌 **Gemappter Ziel-Port:** `{z_port}` (von Quelle `{q_port or get_dual_port_str(port_a_input)}`)"
+            port_details = (
+                f"🖥️ **Im System auszuwählen (Range/Port):** `{z_port}`\n  *"
+                f" 🔌 **Ziel-Steckplatz für Techniker:** `{z_port}`"
+            )
           elif p_range:
-            port_info = (
-                f"🔓 **Trunk-Range (frei wählbar):** `{p_range}` (Start-Ref:"
-                f" `{get_dual_port_str(port_a_input)}`)"
+            calc_port = calculate_mapped_port(port_a_input, p_range)
+            port_details = (
+                f"🖥️ **Im System auszuwählen (Range):** `{p_range}`\n  * 🔌"
+                f" **Berechneter Steckplatz für Techniker:** `{calc_port}`"
             )
           else:
-            port_info = (
-                f"🔒 **1:1 Durchschaltung:**"
-                f" `{get_dual_port_str(port_a_input)}`"
+            port_details = (
+                f"🖥️ **Im System auszuwählen:** `1:1 Durchschaltung`\n  * 🔌"
+                f" **Ziel-Steckplatz für Techniker:** `Port {p1}/{p2}`"
             )
 
         st.info(f"""
                 **Step {idx + 1}: {current_pp}**  
                 * 📍 **Raum:** `{raum}` | **Rack:** `{rack}` | **HE:** `{he}`  
-                * 🔌 **Port / Belegung:** {port_info}
+                * {port_details}
                 """)
 
         if idx > 0:
