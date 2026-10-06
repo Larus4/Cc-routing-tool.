@@ -57,4 +57,3 @@ if st.button("🚀 Pfad & Routing berechnen", use_container_width=True):
         **2. Zielpunkt:**  
         Raum `{raum_z}` | Rack `{rack_z}` | `{pp_z}` | Port `{port_z}`
         """)
-
