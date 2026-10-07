@@ -112,9 +112,9 @@ if target_mode == "Konkretes Z-Panel angeben":
   )
 else:
   target_ibx = st.text_input(
-      "Ziel-IBX eingeben (z.B. FR2, FR5, FR7)*",
+      "Ziel-IBX eingeben (z.B. FR4, FR5, FR6, FR7, FR8)*",
       value="",
-      placeholder="z.B. FR2",
+      placeholder="z.B. FR5",
   ).strip()
 
 st.markdown("---")
@@ -127,14 +127,18 @@ def find_route(start_pp, blocked_set, target_z="", target_ibx_str=""):
   visited.add(start_pp)
 
   target_ibx_clean = target_ibx_str.upper() if target_ibx_str else ""
+  # Definition von externen Bereichen (wo ihr nicht zuständig seid -> Stopp am Übergabe-Panel)
+  external_ibxs = ["FR5", "FR7"]
 
   while queue:
     path = queue.pop(0)
     node = path[-1]
 
+    # Fall 1: Konkretes Z-Panel erreicht
     if target_z and node == target_z:
       return path
 
+    # Fall 2: Suche nach Ziel-IBX
     if target_ibx_clean:
       link_to_target = next(
           (
@@ -146,6 +150,11 @@ def find_route(start_pp, blocked_set, target_z="", target_ibx_str=""):
           None,
       )
       if link_to_target:
+        # Wenn es ein externes IBX ist (FR5/FR7), fügen wir das Ziel-Panel als Endpunkt hinzu und stoppen
+        if target_ibx_clean in external_ibxs:
+          target_node = link_to_target.get("ziel_pp")
+          if target_node and target_node not in path:
+            path.append(target_node)
         return path
 
     next_hops = [
@@ -156,10 +165,11 @@ def find_route(start_pp, blocked_set, target_z="", target_ibx_str=""):
 
     for link in next_hops:
       next_node = link["ziel_pp"]
-      visited.add(next_node)
-      new_path = list(path)
-      new_path.append(next_node)
-      queue.append(new_path)
+      if next_node:
+        visited.add(next_node)
+        new_path = list(path)
+        new_path.append(next_node)
+        queue.append(new_path)
 
   return [start_pp]
 
@@ -202,7 +212,6 @@ if st.button("🚀 Pfad ermitteln", use_container_width=True):
       st.markdown("### 🗺️ Routing-Pfad, Rauminformationen & System-Details:")
 
       for idx, current_pp in enumerate(route_pps):
-        # Link-Informationen aus der Datenbank ziehen
         link_details = next(
             (
                 item
